@@ -7,16 +7,18 @@
 
 import numpy as np
 import requests
-from astropy import table, time
+from astropy import table, time, units as u
 _j2000_jd = 2451545.0
 _usable_fov = 1.2
-
+_nuv_nonlinear_limit = 311. #cps
+_fuv_nonlinear_limit = 109. #cps
 
 baseURL = ('https://mastcomp.stsci.edu/portal/Mashup/MashupQuery.asmx/Galex'
            'PhotonListQueryTest?query=')
 MCATDB = 'GR6Plus7.dbo'
-default_columns = "ra, dec, nuv_flux, nuv_fluxerr, fuv_flux, fuv_fluxerr, " \
-                  "vpe.fexptime, vpe.nexptime, nuv_artifact, fuv_artifact, " \
+default_columns = "ra, dec, NUV_FLUX_APER_7, NUV_FLUXERR_APER_7, " \
+                  "FUV_FLUX_APER_7, FUV_FLUXERR_APER_7, vpe.fexptime, " \
+                  "vpe.nexptime, nuv_artifact, fuv_artifact, " \
                   "vpe.fexpstar,  vpe.fexpend, vpe.nexpstar, vpe.nexpend, " \
                   "fov_radius".split(', ')
 
@@ -171,9 +173,9 @@ def add_position_offset_column(ra, dec, pm_ra, pm_dec, tbl):
     tbl['offset'] = _dist(reference_position, source_positions)
 
 
-def match_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
-                 search_radius=25./60, sigma_clip=3., query_timeout=60.,
-                 include_coarse_limits=True):
+def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
+                   search_radius=25./60, query_timeout=60.,
+                   coarse_upper_limits=True):
     # compute coordinates at start and end of galex lifetime (2004-2011)
     def correct_coords(year):
         jd = (year - 2000)*365.25 + _j2000_jd
@@ -196,28 +198,30 @@ def match_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     # match source and get fluxes for each band
     def get_fluxes(band):
         return get_nearest_source_fluxes(tbl, band, match_radius=match_radius,
-                                         include_coarse_limits=include_coarse_limits)
-    fuv_flux, fuv_err = coadd_fluxes(*get_fluxes('fuv'), sigma_clip=sigma_clip)
-    nuv_flux, nuv_err = coadd_fluxes(*get_fluxes('nuv'), sigma_clip=sigma_clip)
+                                         coarse_upper_limits=coarse_upper_limits)
 
-    return fuv_flux, fuv_err, nuv_flux, nuv_err
+    return get_fluxes('fuv'), get_fluxes('nuv')
 
 
-def match_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
-                    search_radius=25./60, sigma_clip=3., query_timeout=60.,
-                    include_coarse_limits=True)):
-    pass
+def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
+                      search_radius=25./60, sigma_clip=3., query_timeout=60.,
+                      coarse_upper_limits=True):
+    data = extract_source(ra, dec, pm_ra, pm_dec, match_radius,
+                          search_radius, query_timeout, coarse_upper_limits)
+    fuv_data, nuv_data = data
+    return coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip), \
+           coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip)
 
 
 def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
     fluxes, errs, expts = map(np.asarray, (fluxes, errs, expts))
-    if np.all(np.isnan(fluxes)):
+    if np.all(fluxes == -999.):
         # just pick most restrictive limit
-        return np.nan, np.min(errs)
+        return -999., np.min(errs)
     else:
         def apply_filter(keep):
             return [a[keep] for a in (fluxes, errs, expts)]
-        keep = ~np.isnan(fluxes)
+        keep = fluxes > 0
         fluxes, errs, expts = apply_filter(keep)
         median = np.median(fluxes)
         keep = (fluxes - median)/errs < sigma_clip
@@ -228,18 +232,26 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
 
 
 def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
-                              include_coarse_limits=True):
+                              coarse_upper_limits=True):
     # for each unique time (i.e. each unique exposure), find nearest source
     # note that there  can be multiple exposures  for a single tile, so don't
     # use tile id for this
     letter = band[0]
+    fluxcol = band.upper() + '_FLUX_APER_7'
+    errcol = band.upper() + '_FLUXERR_APER_7'
 
     unique_expend = np.unique(tbl[letter + 'expend'])
     unique_expend = unique_expend[unique_expend > 0]
-    fluxes, errs, expts = [], [], []
+    fluxes, errs, expts, offsets = [], [], [], []
     for expend in unique_expend:
         exp_tbl = tbl[tbl[letter + 'expend'] == expend]
-        if not np.any(exp_tbl['offset'] < match_radius):
+        i_closest = np.argmin(exp_tbl['offset'])
+        flux = exp_tbl[fluxcol][i_closest]
+        err = exp_tbl[errcol][i_closest]
+
+        too_far = exp_tbl['offset'][i_closest] > match_radius
+        null_value = flux == -999.
+        if too_far or null_value:
             # first make sure tile center is close enough that source would have
             # been within the match radius if it was present. there is not a column
             # in the mcat database for boresight position, but if the center is
@@ -251,26 +263,38 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
             dist = _dist(source_pts, search_pt)
             if np.all(dist + exp_tbl['fov_radius'] > _usable_fov/2.):
                 continue
-            if include_coarse_limits and len(exp_tbl) > 10:
-                other_fluxes = exp_tbl[letter + 'uv_flux']
-                other_errs = exp_tbl[letter + 'uv_fluxerr']
+
+            # somehow exposure times can vary even if they have the same start
+            # and end. I think they must be dead-time corrected, so I'll keep
+            # only those that are near the max
+            # ...  actually I might have imagned that, but I'll keep this
+            # anyway to be safe
+            expt_col = exp_tbl[letter + 'exptime']
+            keep = expt_col > 0.95 * expt_col.max()
+            exp_tbl = exp_tbl[keep]
+
+            if coarse_upper_limits and len(exp_tbl) > 10:
+                other_fluxes = exp_tbl[fluxcol]
+                other_errs = exp_tbl[errcol]
+                use = other_fluxes > -999. and other_fluxes
                 a, b = np.polyfit(np.log(other_fluxes), np.log(other_errs), 1)
 
                 # twice the error for which  S/N = 1 (log(err) = log(flux))
                 log_err_SN1 = b/(1-a)
                 lim = 2*np.exp(log_err_SN1)
 
-                fluxes.append(np.nan)
+                fluxes.append(-999.)
                 errs.append(lim)
+                expts.append(np.mean(tbl[letter + 'exptime']))
             else:
-                fluxes.append(np.nan)
-                errs.append(np.nan)
+                fluxes.append(-999.)
+                errs.append(-999.)
+                expts.append(-999.)
+            offsets.append(-999.)
         else:
-            i_closest = np.argmin(exp_tbl['offset'])
-            flux = exp_tbl[letter + 'uv_flux'][i_closest]
-            err = exp_tbl[letter + 'uv_fluxerr'][i_closest]
             fluxes.append(flux)
             errs.append(err)
-        expts.append(exp_tbl[letter + 'exptime'][i_closest])
+            offsets.append(exp_tbl['offset'][i_closest])
+            expts.append(exp_tbl[letter + 'exptime'][i_closest])
 
-    return fluxes, errs, expts
+    return fluxes, errs, expts, offsets
