@@ -10,14 +10,15 @@ import requests
 from astropy import table, time, units as u
 _j2000_jd = 2451545.0
 _usable_fov = 1.2
-_nuv_nonlinear_limit = 311. #cps
-_fuv_nonlinear_limit = 109. #cps
+_aper_7_radius = 23 / 2.  # pix
+_aper_7_area = np.pi * (_aper_7_radius * 1.5) ** 2  # arcsec2
 
 baseURL = ('https://mastcomp.stsci.edu/portal/Mashup/MashupQuery.asmx/Galex'
            'PhotonListQueryTest?query=')
 MCATDB = 'GR6Plus7.dbo'
 default_columns = "ra, dec, NUV_FLUX_APER_7, NUV_FLUXERR_APER_7, " \
-                  "FUV_FLUX_APER_7, FUV_FLUXERR_APER_7, vpe.fexptime, " \
+                  "FUV_FLUX_APER_7, FUV_FLUXERR_APER_7, " \
+                  "nuv_skybg, fuv_skybg, vpe.fexptime, " \
                   "vpe.nexptime, nuv_artifact, fuv_artifact, " \
                   "vpe.fexpstar,  vpe.fexpend, vpe.nexpstar, vpe.nexpend, " \
                   "fov_radius".split(', ')
@@ -175,7 +176,7 @@ def add_position_offset_column(ra, dec, pm_ra, pm_dec, tbl):
 
 def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
                    search_radius=25./60, query_timeout=60.,
-                   coarse_upper_limits=True):
+                   upper_limits=True):
     # compute coordinates at start and end of galex lifetime (2004-2011)
     def correct_coords(year):
         jd = (year - 2000)*365.25 + _j2000_jd
@@ -198,16 +199,16 @@ def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     # match source and get fluxes for each band
     def get_fluxes(band):
         return get_nearest_source_fluxes(tbl, band, match_radius=match_radius,
-                                         coarse_upper_limits=coarse_upper_limits)
+                                         upper_limits=upper_limits)
 
     return get_fluxes('fuv'), get_fluxes('nuv')
 
 
 def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
                       search_radius=25./60, sigma_clip=3., query_timeout=60.,
-                      coarse_upper_limits=True):
+                      upper_limits=True):
     data = extract_source(ra, dec, pm_ra, pm_dec, match_radius,
-                          search_radius, query_timeout, coarse_upper_limits)
+                          search_radius, query_timeout, upper_limits)
     fuv_data, nuv_data = data
     return coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip), \
            coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip)
@@ -215,7 +216,7 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
 
 def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
     fluxes, errs, expts = map(np.asarray, (fluxes, errs, expts))
-    if np.all(fluxes == -999.):
+    if np.all(fluxes <= -99.):
         # just pick most restrictive limit
         return -999., np.min(errs)
     else:
@@ -232,7 +233,7 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
 
 
 def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
-                              coarse_upper_limits=True):
+                              upper_limits=True):
     # for each unique time (i.e. each unique exposure), find nearest source
     # note that there  can be multiple exposures  for a single tile, so don't
     # use tile id for this
@@ -250,7 +251,7 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
         err = exp_tbl[errcol][i_closest]
 
         too_far = exp_tbl['offset'][i_closest] > match_radius
-        null_value = flux == -999.
+        null_value = flux <= -99.
         if too_far or null_value:
             # first make sure tile center is close enough that source would have
             # been within the match radius if it was present. there is not a column
@@ -264,28 +265,14 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
             if np.all(dist + exp_tbl['fov_radius'] > _usable_fov/2.):
                 continue
 
-            # somehow exposure times can vary even if they have the same start
-            # and end. I think they must be dead-time corrected, so I'll keep
-            # only those that are near the max
-            # ...  actually I might have imagned that, but I'll keep this
-            # anyway to be safe
-            expt_col = exp_tbl[letter + 'exptime']
-            keep = expt_col > 0.95 * expt_col.max()
-            exp_tbl = exp_tbl[keep]
-
-            if coarse_upper_limits and len(exp_tbl) > 10:
-                other_fluxes = exp_tbl[fluxcol]
-                other_errs = exp_tbl[errcol]
-                use = other_fluxes > -999. and other_fluxes
-                a, b = np.polyfit(np.log(other_fluxes), np.log(other_errs), 1)
-
-                # twice the error for which  S/N = 1 (log(err) = log(flux))
-                log_err_SN1 = b/(1-a)
-                lim = 2*np.exp(log_err_SN1)
-
+            if upper_limits:
+                expt = np.median(exp_tbl[letter + 'exptime'])
+                bg_cps = np.mean(exp_tbl[band + '_skybg']) * _aper_7_area
+                bg_cpserr = np.sqrt(bg_cps/expt)
+                lim = 2*bg_cpserr
                 fluxes.append(-999.)
                 errs.append(lim)
-                expts.append(np.mean(tbl[letter + 'exptime']))
+                expts.append(expt)
             else:
                 fluxes.append(-999.)
                 errs.append(-999.)
