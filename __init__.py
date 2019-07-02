@@ -55,74 +55,6 @@ def _strip_prefix(name):
     return pieces[-1]
 
 
-def circle_intersections(xyr0, xyr1):
-    """
-    Compute the points where two circles interesect.
-
-    Parameters
-    ----------
-    circles : 2x3 array-like
-        [[x0,y0,r0],[x1,y1,r1]] - the radius and center coordinates of the two
-        circles
-
-    Returns
-    -------
-    xpts : list or array
-        If the circles do not interset, an empty list is returned. If one
-        circle is enclosed in another, the index ([0] or [1]) of that circle is
-        returned. Otherwise, the intersection points are returned as the array
-        [[xi0,yi0], [xi1,yi1]] with xi0 >= xi1. In the rare case that the
-        just touch, the one intersection point will be returned twice.
-    """
-    (x0, y0, r0), (x1, y1, r1) = xyr0, xyr1
-    d = _dist((x0, y0), (x1, y1))
-    if np.isclose(d, (r0 + r1)):
-        frac = r0/r1
-        xi = x0 + frac*(x1 - x0)
-        yi = y0 + frac*(y1 - y0)
-        return (xi, yi),
-    if d > (r0 + r1):  # if the circles do not intersect
-        return ()
-    elif d < abs(r1 - r0):  # if one circle is within another
-        return ()
-    else:
-        # compute intersection. some variables are arbitrarly assigned just to
-        # make the math more concise. the math may be worked out by
-        # simultaneously solving the equations for two circles
-        q = (r0 ** 2 - r1 ** 2 + x1 ** 2 - x0 ** 2 + y1 ** 2 - y0 ** 2) / 2.0
-        dx, dy = (x1 - x0), (y1 - y0)
-        a = 1 + dx ** 2 / dy ** 2
-        b = -2 * x0 - 2 * q * dx / dy ** 2 + 2 * y0 * dx / dy
-        c = x0 ** 2 + y0 ** 2 + q ** 2 / dy ** 2 - 2 * q * y0 / dy - r0 ** 2
-        xi0 = (-b + np.sqrt(b ** 2 - 4 * a * c)) / 2 / a
-        xi1 = (-b - np.sqrt(b ** 2 - 4 * a * c)) / 2 / a
-        yi0, yi1 = (q - xi0 * dx) / dy, (q - xi1 * dx) / dy
-        return (xi0, yi0), (xi1, yi1)
-
-
-def _infer_center(xyr0, xyr1, xyr2):
-    ixs = circle_intersections(xyr0, xyr1)
-
-    if len(ixs) == 0:
-        raise ValueError("Uh oh, there doesn't seem to be a common center.")
-    elif len(ixs)  == 1:
-        # if somehow two points are exactly opposed, the circles defined by
-        # their radius from the center will just graze and give one point
-        return ixs[0]
-    else:
-        # otherwise, there will be two points of intersection. find the
-        # actual center by using a point to find which is closer to the
-        # circle its radius defines
-        xs, ys = np.array(ixs).T
-        x, y, r = xyr2
-        radii = np.sqrt((xs - x) ** 2 + (ys - y) ** 2)
-        error = np.abs(radii - r)
-        i = np.argmin(error)
-        if error[i] > 0.001:
-            raise ValueError("Hmmmm, that ain't right.")
-        return xs[i], ys[i]
-
-
 def compute_expected_positions(ra, dec, pm_ra, pm_dec, jd):
     pm = np.array((pm_ra, pm_dec))/3600/1000./365 # deg/d
     def translate(x, dxdt):
@@ -140,13 +72,24 @@ def _mcattime2jd(time_mcat):
     return time_unix.jd
 
 
+
+
+
 def fetch_mcat_data(ra, dec, search_radius=2 / 60., addnl_columns=None,
-                    timeout=60.):
+                    timeout=60., connect_retries=10):
 
     # for reference, 1-sigma astrometric uncertainty is 0.4"
     query = _assemble_http_query(ra, dec, search_radius,
                                  addnl_columns=addnl_columns)
-    r = requests.get(query, timeout=timeout)
+    count = 1
+    while count <= 10:
+        try:
+            r = requests.get(query, timeout=timeout)
+            break
+        except requests.ConnectionError:
+            count += 1
+            continue
+
     try:
         rows = r.json()['data']['Tables'][0]['Rows']
     except:
@@ -155,7 +98,10 @@ def fetch_mcat_data(ra, dec, search_radius=2 / 60., addnl_columns=None,
 
     cols = _combine_columns(addnl_columns)
     names = map(_strip_prefix, cols)
-    tbl = table.Table(rows=rows, names=names, masked=True)
+    if len(rows) == 0:
+        tbl = table.Table(names=names, masked=True)
+    else:
+        tbl = table.Table(rows=rows, names=names, masked=True)
     tbl.meta['search_position'] = ra, dec
     tbl.meta['search_radius'] = search_radius
     return tbl
@@ -201,7 +147,7 @@ def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
         return get_nearest_source_fluxes(tbl, band, match_radius=match_radius,
                                          upper_limits=upper_limits)
 
-    return get_fluxes('fuv'), get_fluxes('nuv')
+    return get_fluxes('nuv'), get_fluxes('fuv')
 
 
 def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
@@ -209,12 +155,14 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
                       upper_limits=True):
     data = extract_source(ra, dec, pm_ra, pm_dec, match_radius,
                           search_radius, query_timeout, upper_limits)
-    fuv_data, nuv_data = data
-    return coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip), \
-           coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip)
+    nuv_data, fuv_data = data
+    return coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip), \
+           coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip)
 
 
 def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
+    if len(fluxes) == 0:
+        return -999., -999.
     fluxes, errs, expts = map(np.asarray, (fluxes, errs, expts))
     if np.all(fluxes <= -99.):
         # just pick most restrictive limit
@@ -234,6 +182,9 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
 
 def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
                               upper_limits=True):
+    if len(tbl) == 0:
+        return [], [], [], []
+
     # for each unique time (i.e. each unique exposure), find nearest source
     # note that there  can be multiple exposures  for a single tile, so don't
     # use tile id for this
@@ -285,3 +236,37 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
             expts.append(exp_tbl[letter + 'exptime'][i_closest])
 
     return fluxes, errs, expts, offsets
+
+
+def nonlinearity_correction(cps, err, band):
+    """Good rule of thumb is not to trust correction when error following
+    correction is >3x the error prior to correction."""
+
+    # I fit these from the plot for the APER_7 curve to match the catalog
+    # values this code pulls
+    if band.lower() == "fuv":
+        a, b, c0 = -0.23428377,  1.69610651, -0.51978853
+    elif band.lower() == "nuv":
+        a, b, c0 = -0.15198511,  1.60029826, -0.621034
+    else:
+        raise ValueError("Band must be NUV or FUV.")
+
+    # find where the corrected values are closest to the measured values
+    logPR0 = np.sqrt(c0/a)
+    logMR0 = a*logPR0**2 + b*logPR0 + c0
+
+    logMR = np.log10(cps)
+    correct = logMR > logMR0
+    c = c0 - logMR
+
+    logPR = (-b + np.sqrt(b**2 - 4*a*c))/(2*a)
+    PR = 10**logPR
+    dlogPR_dc = 1./np.sqrt(b**2 - 4*a*c)
+    dc_dPR = 1/np.log(10)/cps
+    PRerr = 10**logPR*np.log(10)*dlogPR_dc*dc_dPR*err
+
+    PR[~correct] = cps
+    PRerr[~correct] = err
+    return PR, PRerr
+
+
