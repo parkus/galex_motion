@@ -256,7 +256,6 @@ def nonlinearity_correction(cps, err, band):
     logMR0 = a*logPR0**2 + b*logPR0 + c0
 
     logMR = np.log10(cps)
-    correct = logMR > logMR0
     c = c0 - logMR
 
     logPR = (-b + np.sqrt(b**2 - 4*a*c))/(2*a)
@@ -265,8 +264,9 @@ def nonlinearity_correction(cps, err, band):
     dc_dPR = 1/np.log(10)/cps
     PRerr = 10**logPR*np.log(10)*dlogPR_dc*dc_dPR*err
 
-    PR[~correct] = cps
-    PRerr[~correct] = err
+    correct = logMR > logMR0
+    PR[~correct] = cps[~correct]
+    PRerr[~correct] = err[~correct]
     return PR, PRerr
 
 
