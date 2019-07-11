@@ -62,9 +62,17 @@ def compute_expected_positions(ra, dec, pm_ra, pm_dec, jd):
     return map(translate, (ra, dec), pm)
 
 
-def _dist(xy0, xy1):
-    xy0, xy1 = [np.reshape(a, (-1, 2)) for a in (xy0, xy1)]
-    return np.sqrt(np.sum((xy1 - xy0)**2, axis=1))
+def _skydist(ra0, dec0, ra1, dec1):
+    """arc-distance between coordinates on sky assuming small values."""
+    dra = ra1 - ra0
+    if hasattr(dra, '__iter__'):
+        gtr = dra > 180
+        dra[gtr] = 360 - dra[gtr]
+    else:
+        if dra > 180:
+            dra = 360 - dra
+
+    return np.sqrt(dra**2 + (dec1 - dec0)**2)
 
 
 def _mcattime2jd(time_mcat):
@@ -114,10 +122,9 @@ def add_position_offset_column(ra, dec, pm_ra, pm_dec, tbl):
     fuv_and_nuv_times = np.array((tbl['nexpstar'], tbl['fexpstar']))
     times = np.max(fuv_and_nuv_times, axis=0)
     jd = _mcattime2jd(times)
-    reference_position = compute_expected_positions(ra, dec, pm_ra, pm_dec, jd)
-    reference_position = np.array(reference_position).T
-    source_positions = np.array((tbl['ra'], tbl['dec'])).T
-    tbl['offset'] = _dist(reference_position, source_positions)
+    ra_expected, dec_expected = compute_expected_positions(ra, dec, pm_ra,
+                                                           pm_dec, jd)
+    tbl['offset'] = _skydist(ra_expected, dec_expected, tbl['ra'], tbl['dec'])
 
 
 def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
@@ -210,9 +217,9 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
             # close enough then the distance between the points and the search
             # coordinates plust the points and the boresight will all be greater
             # than the detector radius
-            source_pts = np.array((exp_tbl['ra'], exp_tbl['dec'])).T
-            search_pt = np.array(tbl.meta['search_position'])
-            dist = _dist(source_pts, search_pt)
+            ra_search, dec_search = tbl.meta['search_position']
+            dist = _skydist(exp_tbl['ra'], exp_tbl['dec'],
+                            ra_search, dec_search)
             if np.all(dist + exp_tbl['fov_radius'] > _usable_fov/2.):
                 continue
 
