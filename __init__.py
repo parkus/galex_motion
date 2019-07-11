@@ -187,6 +187,13 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
         return coadd_flux, coadd_err
 
 
+def _other_band(band):
+    if band.upper() == "FUV":
+        return "NUV"
+    if band.upper() == "NUV":
+        return "FUV"
+
+
 def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
                               upper_limits=True):
     if len(tbl) == 0:
@@ -197,6 +204,7 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
     # use tile id for this
     letter = band[0]
     fluxcol = band.upper() + '_FLUX_APER_7'
+    othercol = _other_band(band) + '_FLUX_APER_7'
     errcol = band.upper() + '_FLUXERR_APER_7'
 
     unique_expend = np.unique(tbl[letter + 'expend'])
@@ -204,13 +212,23 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
     fluxes, errs, expts, offsets = [], [], [], []
     for expend in unique_expend:
         exp_tbl = tbl[tbl[letter + 'expend'] == expend]
-        i_closest = np.argmin(exp_tbl['offset'])
+        isort = np.argsort(exp_tbl['offset'])
+        i_closest, i_next = isort[:2]
         flux = exp_tbl[fluxcol][i_closest]
         err = exp_tbl[errcol][i_closest]
+        null_flux = flux <= -99.
+        if null_flux:
+            # check to see if GALEX accidentally made one source two separate
+            # sources in FUV and NUV
+            flux_next = exp_tbl[fluxcol][i_next]
+            flux_other = exp_tbl[othercol][i_closest]
+            if flux_next > 0 and flux_other > 0:
+                flux = flux_next
+                err = exp_tbl[errcol][i_next]
+                null_flux = False
 
         too_far = exp_tbl['offset'][i_closest] > match_radius
-        null_value = flux <= -99.
-        if too_far or null_value:
+        if too_far or null_flux:
             # first make sure tile center is close enough that source would have
             # been within the match radius if it was present. there is not a column
             # in the mcat database for boresight position, but if the center is
@@ -249,6 +267,11 @@ def nonlinearity_correction(cps, err, band):
     """Good rule of thumb is not to trust correction when error following
     correction is >3x the error prior to correction."""
 
+    scalar_input = False
+    if np.isscalar(cps):
+        scalar_input = True
+        cps, err = [np.array([a]) for a in (cps, err)]
+
     # I fit these from the plot for the APER_7 curve to match the catalog
     # values this code pulls
     if band.lower() == "fuv":
@@ -274,6 +297,8 @@ def nonlinearity_correction(cps, err, band):
     correct = logMR > logMR0
     PR[~correct] = cps[~correct]
     PRerr[~correct] = err[~correct]
+    if scalar_input:
+        return map(np.squeeze, (PR, PRerr))
     return PR, PRerr
 
 
