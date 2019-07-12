@@ -213,11 +213,12 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
     for expend in unique_expend:
         exp_tbl = tbl[tbl[letter + 'expend'] == expend]
         isort = np.argsort(exp_tbl['offset'])
-        i_closest, i_next = isort[:2]
+        i_closest = isort[0]
         flux = exp_tbl[fluxcol][i_closest]
         err = exp_tbl[errcol][i_closest]
         null_flux = flux <= -99.
-        if null_flux:
+        if null_flux and len(isort) > 1:
+            i_next = isort[1]
             # check to see if GALEX accidentally made one source two separate
             # sources in FUV and NUV
             flux_next = exp_tbl[fluxcol][i_next]
