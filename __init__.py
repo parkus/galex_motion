@@ -215,7 +215,6 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
         isort = np.argsort(exp_tbl['offset'])
         i_closest = isort[0]
         flux = exp_tbl[fluxcol][i_closest]
-        err = exp_tbl[errcol][i_closest]
         null_flux = flux <= -99.
         if null_flux and len(isort) > 1:
             i_next = isort[1]
@@ -224,11 +223,16 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
             flux_next = exp_tbl[fluxcol][i_next]
             flux_other = exp_tbl[othercol][i_closest]
             if flux_next > 0 and flux_other > 0:
-                flux = flux_next
-                err = exp_tbl[errcol][i_next]
-                null_flux = False
+                i_match = i_next
+            else:
+                i_match = i_closest
+        else:
+            i_match = i_closest
 
-        too_far = exp_tbl['offset'][i_closest] > match_radius
+        flux = exp_tbl[fluxcol][i_match]
+        err = exp_tbl[errcol][i_match]
+        null_flux = flux <= -99.
+        too_far = exp_tbl['offset'][i_match] > match_radius
         if too_far or null_flux:
             # first make sure tile center is close enough that source would have
             # been within the match radius if it was present. there is not a column
