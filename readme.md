@@ -15,8 +15,11 @@ Let's get the GALEX fluxes for Epsilon Eridani, a bright, active K star with a h
 
 ```
 import galex_motion as gm
-ra, dec = 53.2326873475, -9.4582586569 # from SIMBAD
-pm_ra, pm_dec = -975.17, 19.49 # from SIMBAD
+
+# Eps Eri's coordinates and proper motions from SIMBAD
+ra, dec = 53.2326873475, -9.4582586569
+pm_ra, pm_dec = -975.17, 19.49
+
 nuv, fuv = gm.extract_and_coadd(ra, dec, pm_ra, pm_dec)
 # nuv and fuv are (flux, error) tuples
 # fluxes are in counts s-1 -- see Morrisey+ 2007 for conversion to magnitude
