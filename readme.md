@@ -1,7 +1,7 @@
 galex_motion
 ============
 
-`galex_motion` is a module to make grabbing and coadding measurements of GALEX fluxes and upper limits from the master source catalog (MCAT) en masse easy. The code combines FUV and NUV measurements that are sometimes erroneously identified as separate FUV and NUV sources in the MCAT. For targets with matches in multiple GALEX exposures, outliers are rejected to mitigate the influence of flares. There is also a utility to correct fluxes in the detectors nonlinear regime.
+`galex_motion` is a module to make grabbing and coadding measurements of GALEX fluxes and upper limits from the master source catalog (MCAT) en masse easy. The code will propagate the proper motion  of the source(s) you want to retrieve fluxes for to the appropriate epoch of each GALEX exposure that might contain the source. Hence the "motion" in the name. It also combines FUV and NUV measurements that are sometimes erroneously identified as separate FUV and NUV sources in the MCAT. For targets with matches in multiple GALEX exposures, outliers are rejected to mitigate the influence of flares. There is also a utility to correct fluxes in the detectors nonlinear regime.
 
 For a module with much greater power and flexibility, including the ability to create intra-exposure lightcurves and access the photon-level GALEX data, use gPhoton instead (https://github.com/cmillion/gPhoton). Alternatively, if you just want a quick look at UV fluxes for a single target, the GALEXView interface is likely the friendliest option (http://galex.stsci.edu/galexView/).
 
