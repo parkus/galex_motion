@@ -111,7 +111,7 @@ def compute_expected_positions(ra, dec, pm_ra, pm_dec, jd):
     pm = np.array((pm_ra, pm_dec))/3600/1000./365 # deg/d
     def translate(x, dxdt):
         return x + dxdt*(jd-_j2000_jd)
-    return map(translate, (ra, dec), pm)
+    return tuple(map(translate, (ra, dec), pm))
 
 
 def fetch_mcat_data(ra, dec, search_radius=2 / 60., addnl_columns=None,
@@ -163,7 +163,7 @@ def fetch_mcat_data(ra, dec, search_radius=2 / 60., addnl_columns=None,
         raise ValueError('Hmmm no data returned, instead got:\n{}'
                          ''.format(r.content))
     cols = _combine_columns(addnl_columns)
-    names = map(_strip_prefix, cols)
+    names = list(map(_strip_prefix, cols))
     if len(rows) == 0:
         tbl = table.Table(names=names, masked=True)
     else:
@@ -556,7 +556,7 @@ def nonlinearity_correction(cps, err, band):
 
     # make output scalar again, if input was scalar
     if scalar_input:
-        return map(np.squeeze, (PR, PRerr))
+        return tuple(map(np.squeeze, (PR, PRerr)))
     return PR, PRerr
 
 
