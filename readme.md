@@ -34,3 +34,8 @@ corrected_nuv = gm.nonlinearity_correction(*nuv, band='nuv')
 print(corrected_nuv[0])
 # 504.5195387279937
 ```
+
+# Gotchas
+- If comparing GALEX View online to make sure you are getting sane values, note that exposures that appear separate in the MCAT are often combined in GALEX View using some logic that I have not yet deciphered.
+- Although something like 4" astrometric accuracy is claimed in Morissey+ 2007, I often find that sources that are clearly the target are substantially farther away. Presently, it looks like 16" captures most objects, but I'm not sure how much contamination this lets in. 
+- Sigma clipping: probably a bad plan. Initially I thought it was wise. But (a) stars show real variability, probably by factors of a few over years, and (b) I think the photometric errors are very optimistic for GALEX.

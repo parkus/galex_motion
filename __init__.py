@@ -249,9 +249,12 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
         Exposure time of each GALEX visit.
     offsets : array
         Offset of the match from the target coordinates.
+    starts : array
+        Start of each GALEX visit in UNIX time, I believe (have not been able
+        to verify this).
     """
     if len(tbl) == 0:
-        return [], [], [], []
+        return [], [], [], [], []
 
     # for each unique time (i.e. each unique exposure), find nearest source
     # note that there  can be multiple exposures  for a single tile, so don't
@@ -262,7 +265,7 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
     errcol = band.upper() + '_FLUXERR_APER_7'
     unique_expend = np.unique(tbl[letter + 'expend'])
     unique_expend = unique_expend[unique_expend > 0]
-    fluxes, errs, expts, offsets = [], [], [], []
+    fluxes, errs, expts, offsets, starts = [], [], [], [], []
     for expend in unique_expend:
         exp_tbl = tbl[tbl[letter + 'expend'] == expend]
         isort = np.argsort(exp_tbl['offset'])
@@ -301,24 +304,28 @@ def get_nearest_source_fluxes(tbl, band, match_radius=2/3600.,
 
             if upper_limits:
                 expt = np.median(exp_tbl[letter + 'exptime'])
+                start = np.median(exp_tbl[letter + 'expstar'])
                 bg_cps = np.mean(exp_tbl[band + '_skybg']) * _aper_7_area
                 bg_cpserr = np.sqrt(bg_cps/expt)
                 lim = 2*bg_cpserr
                 fluxes.append(-999.)
                 errs.append(lim)
                 expts.append(expt)
+                starts.append(start)
             else:
                 fluxes.append(-999.)
                 errs.append(-999.)
                 expts.append(-999.)
+                starts.append(-999.)
             offsets.append(-999.)
         else:
             fluxes.append(flux)
             errs.append(err)
             offsets.append(exp_tbl['offset'][i_closest])
             expts.append(exp_tbl[letter + 'exptime'][i_closest])
+            starts.append(exp_tbl[letter + 'expstar'][i_closest])
 
-    return fluxes, errs, expts, offsets
+    return fluxes, errs, expts, offsets, starts
 
 
 def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
@@ -389,7 +396,7 @@ def extract_source(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     return get_fluxes('nuv'), get_fluxes('fuv')
 
 
-def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
+def coadd_fluxes(fluxes, errs, expts, sigma_clip=None):
     """
     Coadd a set of fluxes. If only upper limits (flux = -999, error > 0),
     return the most restrictive upper limit. Fluxes are weighted by exposure
@@ -403,7 +410,8 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
     expts : array
         Exposure times.
     sigma_clip : float
-        Exclude fluxes > this many sigma from median flux.
+        Exclude fluxes > this many sigma relative to their measurement error
+        from median flux.
     Returns
     -------
     coadd_flux, coadd_err : floats
@@ -431,9 +439,10 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
         fluxes, errs, expts = apply_filter(keep)
 
         # filter out outliers
-        median = np.median(fluxes)
-        keep = (fluxes - median)/errs < sigma_clip
-        fluxes, errs, expts = apply_filter(keep)
+        if sigma_clip:
+            median = np.median(fluxes)
+            keep = (fluxes - median)/errs < sigma_clip
+            fluxes, errs, expts = apply_filter(keep)
 
         # compute average flux weighted by exposure time and error
         coadd_flux = np.sum(fluxes*expts)/np.sum(expts)
@@ -443,8 +452,8 @@ def coadd_fluxes(fluxes, errs, expts, sigma_clip=3.):
 
 
 def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
-                      search_radius=25./60, sigma_clip=3., query_timeout=60.,
-                      upper_limits=True):
+                      search_radius=25./60, sigma_clip=None, query_timeout=60.,
+                      upper_limits=True, return_exps=False):
     """
     The top-level function of this module, extract_and_coadd finds sources in
     GALEX archive matching the target while accounting for its proper motion
@@ -470,17 +479,23 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
         whenever exposures were taken near enough that the target could have
         been in the aperture.
     sigma_clip : float
-        Exclude fluxes > this many sigma from median flux.
+        Exclude fluxes > this many sigma from median flux relative to their
+        measurement error. Careful with this. Stars show real variability
+        that is often well beyond measurement errors, so it is probably
+        unwise to sigma clip in most cases.
     query_timeout : float
         Seconds to wait for server to respond before giving up.
     upper_limits : bool
         Estimate upper limits for exposures where there is no match for the
         source.
+    return_exps : bool
+        If True, return all the data provided by extract_source.
 
     Returns
     -------
     nuv_coadd : tuple
-        Coadded flux and error for nuv band.
+        Coadded flux and error and, optionally, exposure info returned by
+        extract_source.
     fuv_coadd : tuple
         As above, for fuv.
 
@@ -488,8 +503,14 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     data = extract_source(ra, dec, pm_ra, pm_dec, match_radius,
                           search_radius, query_timeout, upper_limits)
     nuv_data, fuv_data = data
-    return coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip), \
-           coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip)
+
+    nuv = list(coadd_fluxes(*nuv_data[:3], sigma_clip=sigma_clip))
+    fuv = list(coadd_fluxes(*fuv_data[:3], sigma_clip=sigma_clip))
+    if return_exps:
+        nuv.append(nuv_data)
+        fuv.append(fuv_data)
+    nuv, fuv = map(tuple, (nuv, fuv))
+    return (nuv, fuv)
 
 
 def nonlinearity_correction(cps, err, band):
