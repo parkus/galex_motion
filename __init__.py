@@ -462,13 +462,13 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     Parameters
     ----------
     ra : float
-        Right ascencion of target.
+        Right ascencion of target in decimal degrees.
     dec : float
-        Declination of target.
+        Declination of target in decimal degrees.
     pm_ra : float
-        Right ascencion proper motion of target.
+        Right ascencion proper motion of target in mas/yr.
     pm_dec : float
-        Declination proper motion of target.
+        Declination proper motion of target in mas/yr.
     match_radius : float
         Radius within which to consider a GALEX source a match to the target
         in degrees. For reference, the 1-sigma astrometric uncertainty is 0.4
