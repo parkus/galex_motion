@@ -494,8 +494,8 @@ def extract_and_coadd(ra, dec, pm_ra, pm_dec, match_radius=4./3600.,
     Returns
     -------
     nuv_coadd : tuple
-        Coadded flux and error and, optionally, exposure info returned by
-        extract_source.
+        Coadded flux and error in counts s-1 and, optionally, exposure info returned by
+        extract_source. Upper limits show up as -999 for the flux with a positive error.
     fuv_coadd : tuple
         As above, for fuv.
 
